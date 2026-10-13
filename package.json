@@ -1,0 +1,78 @@
+{
+  "name": "dsh-zed-provider",
+  "version": "0.1.0",
+  "description": "Use your Zed AI subscription (Pro / Student) from DeepSeek Harness: registers the 'zed-agent' provider route with a live Claude model catalog.",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "test",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "zed",
+    "llm",
+    "adapter",
+    "provider",
+    "plugin",
+    "bundle"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-alpha.2": "compatible"
+      },
+      "dsh": "0.2.1-alpha.2"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4 || ~4.0.5-alpha.1",
+    "@deepseek-ai/dsh-credentials": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-alpha.2",
+    "@deepseek-ai/schemastery": "~3.18.4 || ~3.18.5-alpha.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RGarrido03/dsh-zed-provider.git"
+  },
+  "homepage": "https://github.com/RGarrido03/dsh-zed-provider#readme",
+  "bugs": {
+    "url": "https://github.com/RGarrido03/dsh-zed-provider/issues"
+  }
+}

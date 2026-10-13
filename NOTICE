@@ -1,0 +1,11 @@
+dsh-zed-provider
+
+The Zed Cloud wire protocol implemented here — the native-app sign-in
+handshake (RSA-2048 keypair, OAEP/SHA-256 callback), `POST /client/llm_tokens`,
+`GET /models`, and the `POST /completions` NDJSON framing and provider-native
+request shapes — was ported from the `zed-agent` provider in the oh-my-pi pull
+request "feat(provider): add zed-agent subscription provider"
+(https://github.com/can1357/oh-my-pi/pull/9884), which is MIT licensed.
+
+The DeepSeek Harness adapter, plugin, settings card and model chooser are
+original to this repository.

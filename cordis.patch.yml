@@ -1,0 +1,15 @@
+# dsh-zed-provider bundle layer.
+# One plugin row: registers the `zed-agent` provider route (Zed AI
+# subscription models, streamed through Zed Cloud) and the /zed-login command.
+#
+# `name` must be the FULL package specifier as installed in the profile's
+# node_modules, and it must be quoted: an unquoted YAML scalar starting with
+# `@` fails to parse.
+- insert:
+    - id: llm-zed
+      name: "dsh-zed-provider"
+      config:
+        # Credential reference resolved through the credentials seam; the web
+        # Models page shows this field as the Zed card's key. Its value is
+        # "<userId> <accessToken>", which /zed-login writes for you.
+        apiKeyEnv: ZED_CREDENTIALS
