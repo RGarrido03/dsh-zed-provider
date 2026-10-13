@@ -1,6 +1,6 @@
 {
   "name": "dsh-zed-provider",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Use your Zed AI subscription (Pro / Student) from DeepSeek Harness: registers the 'zed-agent' provider route with a live Claude model catalog.",
   "icon": "./icon.svg",
   "type": "module",
