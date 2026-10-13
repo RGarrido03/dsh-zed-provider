@@ -8,22 +8,8 @@ inside DeepSeek Harness. The bundle registers one LLM provider route,
 ## Install
 
 ```bash
-npm install -g dsh-zed-provider   # or: pnpm add -g dsh-zed-provider
+dsh plugin --profile web add dsh-zed-provider
 ```
-
-For a DeepSeek Harness profile the bundle is installed rather than imported, so
-the patch layer below is what registers the provider route:
-
-```yaml
-- insert:
-    - id: llm-zed
-      name: "dsh-zed-provider"
-      config:
-        apiKeyEnv: ZED_CREDENTIALS
-```
-
-Installing from git also works: pnpm runs the `prepare` hook, which builds
-`lib/` for you.
 
 ## Link your Zed account
 
@@ -131,24 +117,3 @@ profile restart (ESM caches by URL), and the client half is composed from the
 Loader's entries at Host boot, so adding or removing `exports["./client"]` takes
 a restart too — after that it is served per request under a content hash, so
 client-side edits reach the browser on the next load.
-
-## Releasing
-
-`.github/workflows/publish.yml` publishes on a published GitHub release (or a
-manual run), after typechecking, building and testing. It authenticates with
-**npm trusted publishing**: the workflow asks for `id-token: write`, npm
-exchanges that OIDC token for a short-lived publish credential, and the result
-carries a provenance attestation tying the tarball to this repository and commit.
-No npm token is stored in the repository, and the publish step upgrades npm to a
-version that supports it (trusted publishing needs npm ≥ 11.5.1, newer than the
-one bundled with Node 22).
-
-The version comes from `package.json` and npm refuses to publish over an
-existing version, so bump it in the commit the release points at. `lib/` is
-git-ignored and rebuilt by the `prepack` hook, so nothing built is ever
-committed. The registry bootstrap for a brand-new package name still needs one
-token-authenticated publish, because npm cannot attach a trusted publisher to a
-name that has never been published; this package was bootstrapped that way
-(`0.0.0-stage`, then `0.1.0`), and every release from here goes through OIDC.
-
-[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
