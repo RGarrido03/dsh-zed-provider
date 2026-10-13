@@ -171,6 +171,7 @@ test('lists the catalog and writes the model selection', async () => {
   const injected = calls.options.inject()
 
   const catalog = await injected.catalog()
+  assert.equal(catalog.ok, true)
   assert.deepEqual(catalog.models.map((model) => model.id), ['claude-sonnet-5', 'gpt-5.6-luna'])
   assert.deepEqual(catalog.selected, ['claude-sonnet-5'])
   assert.equal(catalog.revision, 7)
@@ -187,12 +188,48 @@ test('lists the catalog and writes the model selection', async () => {
   assert.deepEqual(calls.mutate.at(-1).ops, [{ op: 'unset', path: ['visibleModels'] }])
 })
 
-test('a catalog refusal degrades to an empty list instead of throwing', async () => {
+test('a catalog refusal is reported, not swallowed: it is the linked test', async () => {
   const client = await loadClient()
   const { ctx, calls } = fakeContext()
-  ctx.remote.llm.discoverModels = async () => ({ ok: false, error: { message: 'no credential' } })
+  ctx.remote.llm.discoverModels = async () => ({ ok: false, error: { message: 'llm-zed: no Zed credential' } })
   client.apply(ctx)
   const catalog = await calls.options.inject().catalog()
+  assert.equal(catalog.ok, false)
+  assert.equal(catalog.message, 'llm-zed: no Zed credential')
   assert.deepEqual(catalog.models, [])
   assert.deepEqual(catalog.selected, ['claude-sonnet-5'])
+})
+
+test('subscribes to the pushes that can change a credential', async () => {
+  const client = await loadClient()
+  const { ctx, calls } = fakeContext()
+
+  // Without the remote event bridge there is nothing to subscribe to.
+  client.apply(ctx)
+  const noBridge = calls.options.inject().subscribe(() => {})
+  assert.equal(typeof noBridge, 'function')
+  noBridge()
+
+  const events = []
+  const offs = []
+  let refreshed = 0
+  ctx.remote.$on = (event, handler) => {
+    events.push(event)
+    void handler
+    const off = () => offs.push(event)
+    return off
+  }
+  client.apply(ctx)
+  const subscribe = calls.options.inject().subscribe(() => {
+    refreshed += 1
+  })
+  assert.deepEqual(events, [
+    'credentials/reference-updated',
+    'credentials/record-updated',
+    'settings/document-updated',
+    'llm/adapters-updated',
+  ])
+  subscribe()
+  assert.deepEqual(offs, events)
+  assert.equal(refreshed, 0, 'subscribing does not itself refresh')
 })

@@ -94,19 +94,26 @@ not invent percentages or limits.
 
 ## Development
 
+Sources are TypeScript under `src/`; `lib/` is the build output and is what the
+profile imports (`pnpm build`, `pnpm typecheck`). A profile installs this bundle
+as a `link:` dependency, so `lib/` has to be current in the working copy — run
+`pnpm check:build` before committing, which rebuilds and fails if `lib/` drifted
+from `src/`.
+
 `node --test test/*.test.mjs` covers the pieces that fail silently in
 production: the NDJSON → `StreamChunk` translation for both backends
-(`lib/frames.js` framing, `lib/parse.js` Anthropic events, `lib/responses.js`
-Responses events), the RSA sign-in handshake (`lib/signin.js`), the request
-projections (`lib/anthropic.js`, `lib/responses.js`), and the card's slot
-registration, credential and model-selection wiring (`lib/client.js`, loaded
-under a stubbed module loader in `test/client.test.mjs`). Only `lib/index.js`
-touches the Harness runtime.
+(`src/frames.ts` framing, `src/parse.ts` Anthropic events, `src/responses.ts`
+Responses events), the RSA sign-in handshake (`src/signin.ts`), the request
+projections (`src/anthropic.ts`, `src/responses.ts`), and the card's slot
+registration, credential and model-selection wiring (`src/client.ts`, loaded
+under a stubbed module loader in `test/client.test.mjs`). The tests import the
+built `lib/`, because that is what the Harness actually runs. Only
+`src/index.ts` touches the Harness runtime.
 
-The bundle is installed as a `link:` dependency. The Host half is re-imported
-only by a profile restart (ESM caches by URL); the client half is composed from
-the Loader's entries at Host boot, so adding or removing `exports["./client"]`
-takes a restart too — after that it is served per request under a content hash,
-so client-side edits reach the browser on the next load.
+Two install-time facts worth knowing: the Host half is re-imported only by a
+profile restart (ESM caches by URL), and the client half is composed from the
+Loader's entries at Host boot, so adding or removing `exports["./client"]` takes
+a restart too — after that it is served per request under a content hash, so
+client-side edits reach the browser on the next load.
 
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
