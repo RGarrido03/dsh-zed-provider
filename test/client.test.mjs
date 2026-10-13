@@ -60,6 +60,7 @@ function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settin
   }
 
   const ctx = {
+    __namespace: namespace,
     effect: (run) => {
       const dispose = run()
       return typeof dispose === 'function' ? dispose : () => {}
@@ -189,6 +190,18 @@ test('reads the catalog through the mounted llm remote', async () => {
   const catalog = await calls.options.inject().catalog()
   assert.equal(catalog.ok, true)
   assert.equal(catalog.models.length, 2)
+})
+
+test('an empty stored selection reads as "offer everything", not "offer nothing"', async () => {
+  const client = await loadClient()
+  const { ctx, calls } = fakeContext()
+  // The schema default for an array field is [], so this is what the effective
+  // settings value looks like until the user narrows anything.
+  ctx.__namespace.value.visibleModels = []
+  client.apply(ctx)
+  const catalog = await calls.options.inject().catalog()
+  assert.equal(catalog.ok, true)
+  assert.equal(catalog.selected, null, 'no narrowing is null, not an empty list')
 })
 
 test('lists the catalog and writes the model selection', async () => {

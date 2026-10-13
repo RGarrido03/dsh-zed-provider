@@ -422,7 +422,9 @@ loader.load({
       const toggle = (id: string): void => {
         if (selected === null) return
         const next = selected.includes(id) ? selected.filter((entry) => entry !== id) : [...selected, id].sort()
-        setCatalog((current) => (current === null ? current : { ...current, selected: next }))
+        // Unticking the last box leaves no narrower selection to store, which is
+        // the same state as offering everything.
+        setCatalog((current) => (current === null ? current : { ...current, selected: next.length > 0 ? next : null }))
         setModelsBusy(true)
         Promise.resolve(api.current.select(next))
           .then((error) => {
@@ -707,8 +709,14 @@ loader.load({
       const catalog = async (): Promise<CatalogState> => {
         const discovered = await llmOf()?.discoverModels?.(SETTINGS_NS, { provider: PROVIDER })
         const view = await namespaceOf().catch(() => undefined)
+        // An empty list means "no narrowing", not "nothing selected": the schema
+        // default for an array field is [], so the effective value is an empty
+        // array until the user narrows it, and the Host reads it the same way.
         const visible = view?.value.visibleModels
-        const selected = Array.isArray(visible) ? visible.filter((id): id is string => typeof id === 'string') : null
+        const narrowed = Array.isArray(visible)
+          ? visible.filter((id): id is string => typeof id === 'string')
+          : null
+        const selected = narrowed !== null && narrowed.length > 0 ? narrowed : null
         if (discovered?.ok !== true) {
           return { ok: false, models: [], selected, message: discovered?.error?.message ?? 'the model catalog is unavailable' }
         }
