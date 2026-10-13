@@ -135,15 +135,20 @@ client-side edits reach the browser on the next load.
 ## Releasing
 
 `.github/workflows/publish.yml` publishes on a published GitHub release (or a
-manual run), after typechecking and testing. It needs an npm automation token
-with publish rights on the package, stored as the repository secret
-`NPM_TOKEN`; publishing from CI also attaches npm provenance, which is why the
-workflow asks for `id-token: write`. npm's trusted publishing can replace the
-secret: register this repository and workflow as a trusted publisher for the
-package, then drop the `NODE_AUTH_TOKEN` environment from the publish step.
+manual run), after typechecking, building and testing. It authenticates with
+**npm trusted publishing**: the workflow asks for `id-token: write`, npm
+exchanges that OIDC token for a short-lived publish credential, and the result
+carries a provenance attestation tying the tarball to this repository and commit.
+No npm token is stored in the repository, and the publish step upgrades npm to a
+version that supports it (trusted publishing needs npm ≥ 11.5.1, newer than the
+one bundled with Node 22).
 
-The version comes from `package.json`, so bump it in the commit the release
-points at. `lib/` is git-ignored and rebuilt by the `prepack` hook, so nothing
-built is ever committed.
+The version comes from `package.json` and npm refuses to publish over an
+existing version, so bump it in the commit the release points at. `lib/` is
+git-ignored and rebuilt by the `prepack` hook, so nothing built is ever
+committed. The registry bootstrap for a brand-new package name still needs one
+token-authenticated publish, because npm cannot attach a trusted publisher to a
+name that has never been published; this package was bootstrapped that way
+(`0.0.0-stage`, then `0.1.0`), and every release from here goes through OIDC.
 
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

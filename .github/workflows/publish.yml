@@ -1,8 +1,8 @@
 name: publish
 
 # Publishing is a deliberate act: cut a GitHub release, or run this workflow by
-# hand. The version in package.json is what gets published, so bump it in the
-# commit the release points at.
+# hand. The version comes from package.json, so bump it in the commit the
+# release points at — npm refuses to publish over an existing version.
 on:
   release:
     types: [published]
@@ -10,8 +10,9 @@ on:
 
 permissions:
   contents: read
-  # npm provenance: the workflow exchanges this for a signed attestation that
-  # ties the tarball to this repository and commit.
+  # Trusted publishing: the npm CLI exchanges this OIDC token for a short-lived
+  # publish credential, so no long-lived npm token is stored anywhere. The same
+  # permission carries the provenance attestation.
   id-token: write
 
 jobs:
@@ -26,14 +27,15 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+      # No registry-url: it would write an .npmrc with an empty auth token, and
+      # trusted publishing authenticates by OIDC instead.
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
-      # lib/ is git-ignored, so the tarball's copy comes from the prepack hook.
-      # --provenance needs id-token: write above; --access public covers a scoped
-      # name if the package is ever renamed into one.
+      # Trusted publishing needs npm >= 11.5.1, which is newer than the npm
+      # bundled with Node 22.
+      - run: npm install --global npm@latest
+      - run: npm --version
+      # lib/ is git-ignored; the tarball's copy comes from the prepack hook.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
