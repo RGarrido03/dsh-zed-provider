@@ -39,6 +39,26 @@ function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settin
     },
   }
 
+  const llmRemote = {
+    discoverModels: async (settingsNs, request) => ({
+      ok: true,
+      value: [
+        { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1000000, maxTokens: 128000 },
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 400000, maxTokens: 128000 },
+      ],
+    }),
+  }
+  const settingsRemote = {
+    describe: async () => {
+      calls.remoteSettingsDescribe += 1
+      return { ok: true, value: { namespaces: [namespace] } }
+    },
+    mutate: async (ns, ops, revision) => {
+      calls.mutate.push({ ns, ops, revision })
+      return { ok: true, value: { namespaces: [namespace], revision: 8, writable: true } }
+    },
+  }
+
   const ctx = {
     effect: (run) => {
       const dispose = run()
@@ -51,36 +71,27 @@ function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settin
       // child context carries exactly the requested key.
       const granted = {}
       if (names.includes('remote.credentials') && credentials) granted.credentials = credentialsRemote
-      if (names.includes('remote.llm') && llmWire) granted.llm = ctx.remote.llm
-      if (names.includes('remote.settings') && settingsWire) granted.settings = ctx.remote.settings
+      if (names.includes('remote.llm') && llmWire) granted.llm = llmRemote
+      if (names.includes('remote.settings') && settingsWire) granted.settings = settingsRemote
       if (Object.keys(granted).length === 0) return undefined
       return run({ ...ctx, remote: granted })
     },
     locale: { register: (ns, copy) => calls.locale.push({ ns, copy }) },
-    remote: {
-      credentials: credentials ? credentialsRemote : undefined,
-      settings: settingsWire
-        ? {
-            describe: async () => {
-              calls.remoteSettingsDescribe += 1
-              return { ok: true, value: { namespaces: [namespace] } }
-            },
-            mutate: async (ns, ops, revision) => {
-              calls.mutate.push({ ns, ops, revision })
-              return { ok: true, value: { namespaces: [namespace], revision: 8, writable: true } }
-            },
+    // The real `remote` service is a proxy that throws on keyed access from a
+    // context that did not inject the key, so the fake throws the same way: a
+    // fallback to `ctx.remote.<key>` must fail here, not pass by accident.
+    remote: new Proxy(
+      { $on: undefined },
+      {
+        get(target, key) {
+          if (key === '$on') return target.$on
+          if (key === 'credentials' || key === 'llm' || key === 'settings') {
+            throw new Error(`cannot get property "remote.${key}" without inject`)
           }
-        : undefined,
-      llm: {
-        discoverModels: async (settingsNs, request) => ({
-          ok: true,
-          value: [
-            { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1000000, maxTokens: 128000 },
-            { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 400000, maxTokens: 128000 },
-          ],
-        }),
+          return undefined
+        },
       },
-    },
+    ),
     slots: {
       inject: (name, register) => {
         calls.slots.push(name)
@@ -93,7 +104,7 @@ function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settin
       },
     },
   }
-  return { ctx, calls }
+  return { ctx, calls, remotes: { credentials: credentialsRemote, llm: llmRemote, settings: settingsRemote } }
 }
 
 test('hard-injects only services a root client plugin is guaranteed', async () => {
@@ -159,14 +170,14 @@ test('degrades instead of hanging when the credential remote never mounts', asyn
   assert.equal(described.unavailable, true)
   assert.equal(
     await injected.save('12345 token'),
-    'The credentials service is not reachable from this page yet; reload after DSH finishes starting.',
+    'This page cannot reach the Host service for that yet; reload once DSH has finished starting.',
   )
 })
 
 test('surfaces a refused write instead of reporting success', async () => {
   const client = await loadClient()
-  const { ctx, calls } = fakeContext()
-  ctx.remote.credentials.set = async () => ({ ok: false, error: { message: 'read-only source' } })
+  const { ctx, calls, remotes } = fakeContext()
+  remotes.credentials.set = async () => ({ ok: false, error: { message: 'read-only source' } })
   client.apply(ctx)
   assert.equal(await calls.options.inject().save('12345 token'), 'read-only source')
 })
@@ -206,8 +217,8 @@ test('lists the catalog and writes the model selection', async () => {
 
 test('a catalog refusal is reported, not swallowed: it is the linked test', async () => {
   const client = await loadClient()
-  const { ctx, calls } = fakeContext()
-  ctx.remote.llm.discoverModels = async () => ({ ok: false, error: { message: 'llm-zed: no Zed credential' } })
+  const { ctx, calls, remotes } = fakeContext()
+  remotes.llm.discoverModels = async () => ({ ok: false, error: { message: 'llm-zed: no Zed credential' } })
   client.apply(ctx)
   const catalog = await calls.options.inject().catalog()
   assert.equal(catalog.ok, false)

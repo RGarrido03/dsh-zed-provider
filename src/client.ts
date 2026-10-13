@@ -174,7 +174,7 @@ loader.load({
         saved: 'Credential stored.',
         invalid: 'Paste both halves: a numeric user id, a space, then the access token.',
         storedRef: 'Stored under %s.',
-        unavailable: 'The credentials service is not reachable from this page yet; reload after DSH finishes starting.',
+        unavailable: 'This page cannot reach the Host service for that yet; reload once DSH has finished starting.',
         modelsTitle: 'Models',
         modelsHint: 'Untick the models you never use; the picker then offers only the ticked ones.',
         modelsAll: 'All models are offered. Tick any box to start narrowing the list.',
@@ -199,7 +199,7 @@ loader.load({
         saved: '凭据已保存。',
         invalid: '请粘贴完整的两部分：数字用户 id、一个空格、访问令牌。',
         storedRef: '保存在 %s 下。',
-        unavailable: '当前页面还无法访问凭据服务；请在 DSH 启动完成后重新加载。',
+        unavailable: '当前页面还无法访问该 Host 服务；请在 DSH 启动完成后重新加载。',
         modelsTitle: '模型',
         modelsHint: '取消勾选你不使用的模型，选择器就只提供勾选的模型。',
         modelsAll: '当前提供全部模型。勾选任意一项即可开始筛选。',
@@ -610,31 +610,35 @@ loader.load({
        * path lights up whenever the Host mounts it — without making the main
        * fiber wait for it.
        */
-      const mounted: { credentials?: CredentialsRemote; llm?: ClientRemotes['llm']; settings?: ClientRemotes['settings'] } = {}
-      // Each remote key has to be declared to be mounted for this plugin, which
-      // is why these are child fibers rather than one `remote` lookup.
+      /**
+       * Each remote key is mounted per plugin AND the `remote` service refuses
+       * to hand over a key the calling context did not declare — `ctx.remote.x`
+       * throws "cannot get property … without inject", so it is not a fallback.
+       * These thunks read through the child context that declared the key, at
+       * call time, which also picks up a remote mounted after activation.
+       */
+      let credentialsOf = (): CredentialsRemote | undefined => undefined
+      let llmOf = (): ClientRemotes['llm'] => undefined
+      let settingsOf = (): ClientRemotes['settings'] => undefined
+
       ctx.inject(['remote.credentials'], (child: ClientContext) => {
-        mounted.credentials = child.remote?.credentials
+        credentialsOf = () => child.remote?.credentials
         return () => {
-          mounted.credentials = undefined
+          credentialsOf = () => undefined
         }
       })
       ctx.inject(['remote.llm'], (child: ClientContext) => {
-        mounted.llm = child.remote?.llm
+        llmOf = () => child.remote?.llm
         return () => {
-          mounted.llm = undefined
+          llmOf = () => undefined
         }
       })
       ctx.inject(['remote.settings'], (child: ClientContext) => {
-        mounted.settings = child.remote?.settings
+        settingsOf = () => child.remote?.settings
         return () => {
-          mounted.settings = undefined
+          settingsOf = () => undefined
         }
       })
-
-      const credentialsOf = (): CredentialsRemote | undefined => mounted.credentials ?? ctx.remote?.credentials
-      const llmOf = (): ClientRemotes['llm'] => mounted.llm ?? ctx.remote?.llm
-      const settingsOf = (): ClientRemotes['settings'] => mounted.settings ?? ctx.remote?.settings
 
       /** The reference the Host resolves; read per call so a settings edit is honored. */
       const refOf = async (): Promise<string> => {
@@ -681,7 +685,7 @@ loader.load({
 
       /** This namespace's stored section, for the model selection and its revision. */
       const namespaceOf = async (): Promise<{ ns: string; value: Record<string, unknown>; revision?: number }> => {
-        const described = await ctx.remote?.settings?.describe?.()
+        const described = await settingsOf()?.describe?.()
         if (described?.ok !== true) throw new Error(described?.error?.message ?? 'settings are unavailable')
         const namespaces = (described.value?.namespaces ?? []) as {
           ns?: unknown
