@@ -182,6 +182,7 @@ loader.load({
         modelsLoading: 'Reading Zed\u2019s catalog\u2026',
         modelsEmpty: 'Zed reports no models this plugin can run yet \u2014 link an account first.',
         modelsFailed: 'Could not read the model catalog: %s',
+        advancedHint: 'Other fields live in cordis.patch.yml; edit that section directly. (%s)',
       },
       zh: {
         statusLinked: '已关联 — Zed 接受该凭据。',
@@ -206,13 +207,14 @@ loader.load({
         modelsLoading: '正在读取 Zed 模型目录…',
         modelsEmpty: 'Zed 尚未报告本插件可运行的模型——请先关联账号。',
         modelsFailed: '无法读取模型目录：%s',
+        advancedHint: '其他字段位于 cordis.patch.yml，请直接编辑该节。(%s)',
       },
     }
 
     const h = React.createElement
 
     const styles = {
-      root: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' },
+      block: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' },
       status: { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '12px' },
       dot: (ok: boolean) => ({
         width: '7px',
@@ -383,8 +385,25 @@ loader.load({
         const seat = node.closest('[data-slot="settings.models.provider-card"]') ?? node.parentElement
         const row = seat?.parentElement
         if (row === null || row === undefined) return undefined
+        /**
+         * The shipped editor for an uncurated namespace is a hint plus a footer
+         * whose Apply writes nothing, so the card hides it and carries the hint
+         * itself. Restoring the element matters: it is not ours to leave hidden
+         * when this plugin unmounts.
+         */
+        let hidden: HTMLElement | null = null
         const sync = () => {
-          setEditorOpen(row.lastElementChild !== seat)
+          const last = row.lastElementChild
+          const editor = last !== null && last !== seat ? last : null
+          if (hidden !== null && hidden !== editor) {
+            hidden.style.display = ''
+            hidden = null
+          }
+          if (editor instanceof HTMLElement) {
+            editor.style.display = 'none'
+            hidden = editor
+          }
+          setEditorOpen(editor !== null)
           setEditorResolved(true)
         }
         sync()
@@ -392,6 +411,7 @@ loader.load({
         observer.observe(row, { childList: true })
         return () => {
           observer.disconnect()
+          if (hidden !== null) hidden.style.display = ''
         }
       }, [])
 
@@ -463,9 +483,11 @@ loader.load({
 
       const collapsed = editorResolved && !editorOpen
       return h(
+        // `display: contents` keeps the observability wrapper out of layout, so
+        // the block below sits directly under the provider's own title row.
         'div',
-        { style: styles.root, 'data-zed-provider-card': PROVIDER, ref: root },
-        collapsed ? null : h('div', { style: styles.root },
+        { style: { display: 'contents' }, 'data-zed-provider-card': PROVIDER, ref: root },
+        collapsed ? null : h('div', { style: styles.block },
         h(
           'div',
           { style: styles.status },
@@ -563,6 +585,7 @@ loader.load({
             { style: styles.message(false) },
             t('storedRef').replace('%s', credential?.ref ?? props.fallbackRef ?? DEFAULT_REF),
           ),
+          h('p', { style: styles.hint }, t('advancedHint').replace('%s', SETTINGS_NS)),
           failure === null ? null : h('p', { style: styles.message(true) }, failure),
           notice === null ? null : h('p', { style: styles.message(false) }, notice),
         ),
@@ -587,15 +610,31 @@ loader.load({
        * path lights up whenever the Host mounts it — without making the main
        * fiber wait for it.
        */
-      let mountedCredentials: CredentialsRemote | undefined
+      const mounted: { credentials?: CredentialsRemote; llm?: ClientRemotes['llm']; settings?: ClientRemotes['settings'] } = {}
+      // Each remote key has to be declared to be mounted for this plugin, which
+      // is why these are child fibers rather than one `remote` lookup.
       ctx.inject(['remote.credentials'], (child: ClientContext) => {
-        mountedCredentials = child.remote?.credentials
+        mounted.credentials = child.remote?.credentials
         return () => {
-          mountedCredentials = undefined
+          mounted.credentials = undefined
+        }
+      })
+      ctx.inject(['remote.llm'], (child: ClientContext) => {
+        mounted.llm = child.remote?.llm
+        return () => {
+          mounted.llm = undefined
+        }
+      })
+      ctx.inject(['remote.settings'], (child: ClientContext) => {
+        mounted.settings = child.remote?.settings
+        return () => {
+          mounted.settings = undefined
         }
       })
 
-      const credentialsOf = (): CredentialsRemote | undefined => mountedCredentials ?? ctx.remote?.credentials
+      const credentialsOf = (): CredentialsRemote | undefined => mounted.credentials ?? ctx.remote?.credentials
+      const llmOf = (): ClientRemotes['llm'] => mounted.llm ?? ctx.remote?.llm
+      const settingsOf = (): ClientRemotes['settings'] => mounted.settings ?? ctx.remote?.settings
 
       /** The reference the Host resolves; read per call so a settings edit is honored. */
       const refOf = async (): Promise<string> => {
@@ -610,7 +649,7 @@ loader.load({
           // The settings UI's own scope is not always reachable from here.
         }
         try {
-          const described = await ctx.remote?.settings?.describe?.()
+          const described = await settingsOf()?.describe?.()
           if (described?.ok === true) {
             const named = refFromNamespaces(described.value?.namespaces)
             if (named !== undefined) return named
@@ -662,7 +701,7 @@ loader.load({
        * page's own credential join cannot know (it only sees the reference).
        */
       const catalog = async (): Promise<CatalogState> => {
-        const discovered = await ctx.remote?.llm?.discoverModels?.(SETTINGS_NS, { provider: PROVIDER })
+        const discovered = await llmOf()?.discoverModels?.(SETTINGS_NS, { provider: PROVIDER })
         const view = await namespaceOf().catch(() => undefined)
         const visible = view?.value.visibleModels
         const selected = Array.isArray(visible) ? visible.filter((id): id is string => typeof id === 'string') : null
@@ -689,7 +728,7 @@ loader.load({
 
       /** Write the selection: every runnable model means the field is unset. */
       const select = async (ids: string[]): Promise<string | undefined> => {
-        const settings = ctx.remote?.settings
+        const settings = settingsOf()
         if (typeof settings?.mutate !== 'function') return COPY.en.unavailable
         const view = await namespaceOf()
         const all = (await catalog().catch(() => ({ models: [] }))).models

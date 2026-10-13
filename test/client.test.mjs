@@ -21,7 +21,7 @@ async function loadClient() {
  * `credentials: false` models a page where the credential remote never mounts,
  * which must degrade instead of hanging the fiber.
  */
-function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settingsWire = true } = {}) {
+function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settingsWire = true, llmWire = true } = {}) {
   const calls = { credentials: [], locale: [], slots: [], injects: [], mutate: [], remoteSettingsDescribe: 0 }
   const namespace = { ns: 'llm-zed', revision: 7, value: { apiKeyEnv, visibleModels: ['claude-sonnet-5'] } }
   const credentialsRemote = {
@@ -47,10 +47,14 @@ function fakeContext({ apiKeyEnv = 'ZED_CREDENTIALS', credentials = true, settin
     get: () => undefined, // no settingsScope handed to a root client plugin
     inject: (names, run) => {
       calls.injects.push(names.join(','))
-      if (names.includes('remote.credentials') && credentials) {
-        return run({ ...ctx, remote: { ...ctx.remote, credentials: credentialsRemote } })
-      }
-      return undefined
+      // Each remote key is mounted only for a plugin that declares it, so the
+      // child context carries exactly the requested key.
+      const granted = {}
+      if (names.includes('remote.credentials') && credentials) granted.credentials = credentialsRemote
+      if (names.includes('remote.llm') && llmWire) granted.llm = ctx.remote.llm
+      if (names.includes('remote.settings') && settingsWire) granted.settings = ctx.remote.settings
+      if (Object.keys(granted).length === 0) return undefined
+      return run({ ...ctx, remote: granted })
     },
     locale: { register: (ns, copy) => calls.locale.push({ ns, copy }) },
     remote: {
@@ -103,7 +107,10 @@ test('registers a Zed card on the Models page, keyed by its settings namespace',
   client.apply(ctx)
 
   assert.deepEqual(calls.slots, ['settings.models.provider-card'])
-  assert.deepEqual(calls.injects, ['remote.credentials'])
+  // All three remotes this card reads must be declared: a key that is not
+  // injected is not mounted, and the method silently misses (which is what made
+  // a linked provider read as "not linked yet").
+  assert.deepEqual(calls.injects, ['remote.credentials', 'remote.llm', 'remote.settings'])
   assert.equal(calls.options.name, 'settings.models.provider-card')
   assert.equal(calls.options.key, 'llm-zed')
   assert.equal(calls.options.locale, 'settings.zed')
@@ -162,6 +169,15 @@ test('surfaces a refused write instead of reporting success', async () => {
   ctx.remote.credentials.set = async () => ({ ok: false, error: { message: 'read-only source' } })
   client.apply(ctx)
   assert.equal(await calls.options.inject().save('12345 token'), 'read-only source')
+})
+
+test('reads the catalog through the mounted llm remote', async () => {
+  const client = await loadClient()
+  const { ctx, calls } = fakeContext()
+  client.apply(ctx)
+  const catalog = await calls.options.inject().catalog()
+  assert.equal(catalog.ok, true)
+  assert.equal(catalog.models.length, 2)
 })
 
 test('lists the catalog and writes the model selection', async () => {
