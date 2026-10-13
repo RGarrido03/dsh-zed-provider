@@ -1,3 +1,8 @@
 node_modules/
 .DS_Store
 *.log
+
+# Build output: produced by `pnpm build` (and by the prepare/prepack hooks on
+# install and publish). The published tarball still contains it, because the
+# `files` list includes lib/ and npm packs from the allowlist.
+lib/

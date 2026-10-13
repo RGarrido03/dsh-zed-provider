@@ -5,6 +5,15 @@ inside DeepSeek Harness. The bundle registers one LLM provider route,
 `zed-agent`, whose turns are minted and streamed through Zed Cloud
 (`https://cloud.zed.dev`) exactly as the Zed editor does it.
 
+## Install
+
+```bash
+npm install -g dsh-zed-provider   # or: pnpm add -g dsh-zed-provider
+```
+
+For a DeepSeek Harness profile the bundle is installed rather than imported, so
+the patch layer below is what registers the provider route:
+
 ```yaml
 - insert:
     - id: llm-zed
@@ -12,6 +21,9 @@ inside DeepSeek Harness. The bundle registers one LLM provider route,
       config:
         apiKeyEnv: ZED_CREDENTIALS
 ```
+
+Installing from git also works: pnpm runs the `prepare` hook, which builds
+`lib/` for you.
 
 ## Link your Zed account
 
@@ -94,11 +106,15 @@ not invent percentages or limits.
 
 ## Development
 
-Sources are TypeScript under `src/`; `lib/` is the build output and is what the
-profile imports (`pnpm build`, `pnpm typecheck`). A profile installs this bundle
-as a `link:` dependency, so `lib/` has to be current in the working copy — run
-`pnpm check:build` before committing, which rebuilds and fails if `lib/` drifted
-from `src/`.
+`pnpm install` (which runs the `prepare` hook), then `pnpm check` —
+typecheck, build, tests. Sources are TypeScript under `src/`; `lib/` is build
+output and is git-ignored, because the `prepare`/`prepack` hooks rebuild it
+wherever the package is consumed and the published tarball carries the built
+copy through the `files` allowlist.
+
+A profile can install this bundle as a `link:` to a working copy, in which case
+that copy's `lib/` is what the Host imports: rebuild after changing `src/`, or
+the Host keeps running the previous build.
 
 `node --test test/*.test.mjs` covers the pieces that fail silently in
 production: the NDJSON → `StreamChunk` translation for both backends
@@ -115,5 +131,19 @@ profile restart (ESM caches by URL), and the client half is composed from the
 Loader's entries at Host boot, so adding or removing `exports["./client"]` takes
 a restart too — after that it is served per request under a content hash, so
 client-side edits reach the browser on the next load.
+
+## Releasing
+
+`.github/workflows/publish.yml` publishes on a published GitHub release (or a
+manual run), after typechecking and testing. It needs an npm automation token
+with publish rights on the package, stored as the repository secret
+`NPM_TOKEN`; publishing from CI also attaches npm provenance, which is why the
+workflow asks for `id-token: write`. npm's trusted publishing can replace the
+secret: register this repository and workflow as a trusted publisher for the
+package, then drop the `NODE_AUTH_TOKEN` environment from the publish step.
+
+The version comes from `package.json`, so bump it in the commit the release
+points at. `lib/` is git-ignored and rebuilt by the `prepack` hook, so nothing
+built is ever committed.
 
 [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

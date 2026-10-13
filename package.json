@@ -28,7 +28,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:build": "pnpm build && git diff --exit-code -- lib",
+    "prepare": "tsc -p tsconfig.json",
+    "prepack": "tsc -p tsconfig.json",
+    "check": "pnpm typecheck && pnpm build && pnpm test",
     "test": "node --test test/*.test.mjs"
   },
   "engines": {
@@ -87,5 +89,8 @@
     "@deepseek-ai/schemastery": "3.18.5-alpha.1",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
