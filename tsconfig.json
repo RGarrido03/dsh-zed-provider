@@ -20,7 +20,8 @@
     "sourceMap": false,
     "removeComments": false,
     "outDir": "lib",
-    "rootDir": "src"
+    "rootDir": "src",
+    "moduleDetection": "legacy"
   },
   "include": [
     "src/**/*.ts"

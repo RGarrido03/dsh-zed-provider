@@ -1,10 +1,33 @@
 /**
  * The browser loader hands this file a `require` and reads `apply`/`inject`
- * off the exports it produces. This is a script, not a module: the only
+ * off the exports it produces. This is a classic script, not a module: the only
  * top-level statement is the `load` call below, and everything else lives in
  * the factory closure.
+ *
+ * That is why React is described by the small interface below rather than by
+ * `typeof import('react')`: any import in this file — type-only included —
+ * makes the compiler treat it as a module and emit `export {}`, which the
+ * browser rejects with "Unexpected token 'export'". test/bundle.test.mjs parses
+ * the built file the way the loader does, so this cannot regress silently.
  */
 type ClientRequire = (specifier: string) => unknown
+
+/** The slice of React this card uses; the real module arrives through `require`. */
+interface ReactLike {
+  createElement: (type: unknown, props?: unknown, ...children: unknown[]) => unknown
+  useState: <S>(initial: S | (() => S)) => [S, (next: S | ((previous: S) => S)) => void]
+  useRef: <T>(initial: T) => { current: T }
+  useEffect: (run: () => void | (() => void), deps?: readonly unknown[]) => void
+}
+
+/** Just enough of a DOM event for the one input this card renders. */
+interface InputChangeEvent {
+  target: { value: string }
+}
+
+interface KeyDownEvent {
+  key: string
+}
 
 interface ClientModuleLoader {
   load(definition: { id: string; factory: (require: ClientRequire) => unknown }): void
@@ -122,7 +145,7 @@ const loader = (window as unknown as { __ModuleLoader__: ClientModuleLoader })._
 loader.load({
   id: 'dsh-zed-provider',
   factory: (require: ClientRequire) => {
-    const React = require('react') as typeof import('react')
+    const React = require('react') as ReactLike
     const module: { exports: Record<string, unknown> } = { exports: {} }
     const exports = module.exports
 
@@ -468,8 +491,8 @@ loader.load({
                 placeholder: t('placeholder'),
                 value: draft,
                 disabled: busy,
-                onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft(event.target.value),
-                onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
+                onChange: (event: InputChangeEvent) => setDraft(event.target.value),
+                onKeyDown: (event: KeyDownEvent) => {
                   if (event.key === 'Enter' && !busy) submit()
                 },
               }),
