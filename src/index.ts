@@ -50,6 +50,7 @@ import { buildAnthropicRequest } from './anthropic.js'
 import { LlmStreamError, parseZedAnthropicStream } from './parse.js'
 import { buildResponsesRequest, parseZedResponsesStream } from './responses.js'
 import { decryptAccessToken, generateSignInKeypair, signInUrl } from './signin.js'
+import { classifyZedFailure } from './failures.js'
 import { thinkingFormFor, thinkingFormFromRejection, type ThinkingForm } from './thinking.js'
 
 /** One entry of Zed's `GET /models` catalog, as far as this plugin reads it. */
@@ -185,21 +186,6 @@ async function importLocalZedCredential(): Promise<ZedCredentials | undefined> {
 
 // ───────────────────────────── failures ─────────────────────────────
 
-function trim(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit)}…`
-}
-
-/** Provider-neutral failure code for one HTTP status, in the retry vocabulary. */
-function httpCode(status: number | undefined): string {
-  if (status === 401 || status === 403) return 'AUTH'
-  if (status === 402) return 'QUOTA'
-  if (status === 429) return 'RATE_LIMIT'
-  if (status === 400 || status === 413) return 'INVALID_REQUEST'
-  if (status === undefined) return 'TRANSPORT'
-  if (status >= 500) return 'SERVER'
-  return `HTTP_${status}`
-}
-
 function transportFailure(what: string, error: unknown, signal?: AbortSignal): unknown {
   if (signal?.aborted) return error // the runtime turns this into an aborted finish
   return new LlmError(`llm-zed: ${what}: ${error instanceof Error ? error.message : String(error)}`, 'TRANSPORT', {
@@ -247,25 +233,8 @@ async function llmToken(credentials: ZedCredentials, baseUrl: string, signal?: A
     }
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
-      if (response.status === 401 || response.status === 403) {
-        throw new LlmError(
-          'llm-zed: Zed Cloud rejected the stored credential. Run /zed-login to link your account again.',
-          'AUTH',
-          { status: response.status },
-        )
-      }
-      if (response.status === 402) {
-        throw new LlmError(
-          "llm-zed: this Zed account has no active AI plan, or this month's prompt credits are spent. See https://zed.dev/account.",
-          'QUOTA',
-          { status: 402 },
-        )
-      }
-      throw new LlmError(
-        `llm-zed: could not mint a Zed LLM token (HTTP ${response.status})${detail ? `: ${trim(detail, 300)}` : ''}`,
-        httpCode(response.status),
-        { status: response.status },
-      )
+      const failure = classifyZedFailure(response.status, detail)
+      throw new LlmError(`llm-zed: ${failure.message}`, failure.code, { status: response.status })
     }
     const payload = await response.json().catch(() => undefined)
     const token = typeof payload?.token === 'string' ? payload.token : ''
@@ -323,13 +292,9 @@ async function fetchCatalog(
     throw transportFailure('could not reach the Zed Cloud model list', error, signal)
   }
   if (!response.ok) {
-    throw new LlmError(
-      response.status === 401 || response.status === 403
-        ? 'llm-zed: Zed Cloud rejected the stored credential. Run /zed-login again.'
-        : `llm-zed: Zed Cloud model list failed (HTTP ${response.status})`,
-      httpCode(response.status),
-      { status: response.status },
-    )
+    const detail = await response.text().catch(() => '')
+    const failure = classifyZedFailure(response.status, detail)
+    throw new LlmError(`llm-zed: ${failure.message}`, failure.code, { status: response.status })
   }
   const payload = (await response.json().catch(() => undefined)) as { models?: unknown } | undefined
   const models: unknown[] = Array.isArray(payload?.models) ? payload.models : []
@@ -548,20 +513,10 @@ class ZedAdapter extends LlmAdapter {
         throw transportFailure('could not reach Zed Cloud', error, options.signal)
       }
 
-      if (response.status === 402) {
-        throw new LlmError(
-          "llm-zed: this Zed account has no active AI plan, or this month's prompt credits are spent. See https://zed.dev/account.",
-          'QUOTA',
-          { status: 402 },
-        )
-      }
       if (!response.ok || response.body === null) {
         const detail = await response.text().catch(() => '')
-        throw new LlmError(
-          `llm-zed: Zed Cloud rejected the request (HTTP ${response.status})${detail ? `: ${trim(detail, 300)}` : ''}`,
-          httpCode(response.status),
-          { status: response.status },
-        )
+        const failure = classifyZedFailure(response.status, detail)
+        throw new LlmError(`llm-zed: ${failure.message}`, failure.code, { status: response.status })
       }
       return response as Response & { body: ReadableStream<Uint8Array> }
     }
