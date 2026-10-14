@@ -129,6 +129,33 @@ function userContent(message: RequestMessage): { type: 'text'; text: string }[] 
 }
 
 /**
+ * Mark the end of the conversation as a cache breakpoint.
+ *
+ * Anthropic's prompt caching is opt-in, and a breakpoint caches everything that
+ * precedes it — tools, system prompt and every message up to that block — so one
+ * marker on the last block is the whole cacheable prefix. Placing it only on a
+ * message block keeps `system` and `tools` in the shapes this adapter has
+ * already been accepted with, and the marker moves forward as the history grows,
+ * which is what turns the next turn's prefix into cache reads instead of full
+ * input.
+ */
+function markCacheablePrefix(messages: { role: string; content: unknown }[]): void {
+  for (let position = messages.length - 1; position >= 0; position -= 1) {
+    const content = messages[position].content
+    if (!Array.isArray(content)) continue
+    for (let block = content.length - 1; block >= 0; block -= 1) {
+      const candidate = content[block]
+      if (candidate === null || typeof candidate !== 'object') continue
+      const type = (candidate as { type?: unknown }).type
+      if (type === 'text' || type === 'tool_result' || type === 'tool_use') {
+        ;(candidate as Record<string, unknown>).cache_control = { type: 'ephemeral' }
+        return
+      }
+    }
+  }
+}
+
+/**
  * Project harness history onto Anthropic Messages: system-role text moves into
  * `system`, and consecutive tool results merge into one user turn (Anthropic
  * requires every `tool_result` to answer the preceding `tool_use` turn).
@@ -180,15 +207,18 @@ export function buildAnthropicRequest(
   options: AnthropicRequestInput,
   entry: RequestBudget | undefined,
   form: ThinkingForm = 'budget',
+  cache = true,
 ): Record<string, unknown> {
   const requested = typeof options.maxTokens === 'number' && Number.isFinite(options.maxTokens) ? options.maxTokens : 0
   const advertised = typeof entry?.max_output_tokens === 'number' ? entry.max_output_tokens : 0
   const maxTokens =
     requested > 0 ? Math.trunc(requested) : advertised > 0 ? Math.trunc(advertised) : DEFAULT_MAX_TOKENS
 
+  const messages = buildMessages(options.messages ?? [], options.model)
+  if (cache) markCacheablePrefix(messages)
   const request: Record<string, unknown> = {
     model: options.model,
-    messages: buildMessages(options.messages ?? [], options.model),
+    messages,
     max_tokens: maxTokens,
   }
 

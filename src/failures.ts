@@ -56,3 +56,19 @@ export function classifyZedFailure(status: number | undefined, body: string): Ze
     message: `Zed Cloud rejected the request${detail}`,
   }
 }
+
+/**
+ * Whether a refusal is Zed's parser objecting to the cache breakpoint.
+ *
+ * Prompt caching is opt-in and its marker is the one field this adapter adds
+ * that a stricter parser could reject, so a refusal naming it turns caching off
+ * for the process instead of failing every turn. The marker is worth keeping
+ * where it is accepted: it is what makes a long conversation cost cache reads
+ * rather than full input on every step.
+ *
+ * @param message - the provider's failure text.
+ * @returns true when the marker itself was the problem.
+ */
+export function isCacheControlRefusal(message: string): boolean {
+  return /cache_control/i.test(message) && /(not supported|unknown field|invalid|unexpected|failed to parse)/i.test(message)
+}

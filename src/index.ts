@@ -50,7 +50,7 @@ import { buildAnthropicRequest } from './anthropic.js'
 import { LlmStreamError, parseZedAnthropicStream } from './parse.js'
 import { buildResponsesRequest, parseZedResponsesStream } from './responses.js'
 import { decryptAccessToken, generateSignInKeypair, signInUrl } from './signin.js'
-import { classifyZedFailure } from './failures.js'
+import { classifyZedFailure, isCacheControlRefusal } from './failures.js'
 import { thinkingFormFor, thinkingFormFromRejection, type ThinkingForm } from './thinking.js'
 
 /** One entry of Zed's `GET /models` catalog, as far as this plugin reads it. */
@@ -327,6 +327,8 @@ class ZedAdapter extends LlmAdapter {
   #catalogAt = 0
   /** Thinking dialect each model accepted, learned from one rejected turn. */
   #thinkingForms = new Map<string, ThinkingForm>()
+  /** Whether this gateway accepts the prompt-cache breakpoint; cleared on refusal. */
+  #cacheControl = true
 
   constructor(deps: ZedAdapterDeps) {
     super()
@@ -468,7 +470,7 @@ class ZedAdapter extends LlmAdapter {
     const learned = this.#thinkingForms.get(options.model)
     const initialForm =
       entry?.supports_thinking === true ? (learned ?? thinkingFormFor(options.model)) : 'budget'
-    const buildBody = (form: ThinkingForm): string =>
+    const buildBody = (form: ThinkingForm, cache: boolean): string =>
       JSON.stringify({
         thread_id: randomUUID(),
         prompt_id: randomUUID(),
@@ -477,7 +479,7 @@ class ZedAdapter extends LlmAdapter {
         provider_request:
           backend === 'open_ai'
             ? buildResponsesRequest(projected, entry)
-            : buildAnthropicRequest(projected, entry, form),
+            : buildAnthropicRequest(projected, entry, form, cache),
       })
     const send = (token: string, payload: string): Promise<Response> =>
       fetch(`${baseUrl}/completions`, {
@@ -521,15 +523,18 @@ class ZedAdapter extends LlmAdapter {
       return response as Response & { body: ReadableStream<Uint8Array> }
     }
 
-    // One correction attempt: a model refuses the thinking dialect it does not
-    // speak before producing anything, so the answer can be sent once more with
-    // the other one. Nothing has been yielded at that point, the user sees only
-    // the successful turn, and the model's dialect is remembered from then on.
+    // Two corrections, each at most once and each remembered: the thinking
+    // dialect is refused before the turn starts, and so is the cache breakpoint
+    // by a parser that does not know the field. Both arrive with nothing yet
+    // yielded, so the answer is simply sent again — the user sees only the
+    // successful turn.
     let form = initialForm
-    for (let attempt = 0; ; attempt += 1) {
-      const response = await open(buildBody(form))
+    let cache = this.#cacheControl
+    let corrections = 0
+    for (;;) {
       let emitted = 0
       try {
+        const response = await open(buildBody(form, cache))
         const chunks =
           backend === 'open_ai'
             ? parseZedResponsesStream(response.body, { signal: options.signal })
@@ -540,16 +545,28 @@ class ZedAdapter extends LlmAdapter {
         }
         return
       } catch (error) {
-        const corrected =
-          attempt === 0 && emitted === 0 && error instanceof LlmStreamError
-            ? thinkingFormFromRejection(error.message)
-            : undefined
-        if (corrected === undefined || corrected === form) {
-          if (error instanceof LlmStreamError) throw new LlmError(`llm-zed: ${error.message}`, error.code)
-          throw error
+        const message = error instanceof Error ? error.message : String(error)
+        const correctable = emitted === 0 && corrections < 2
+        if (correctable) {
+          const dialect = thinkingFormFromRejection(message)
+          if (dialect !== undefined && dialect !== form) {
+            this.#thinkingForms.set(options.model, dialect)
+            form = dialect
+            corrections += 1
+            continue
+          }
+          if (cache && isCacheControlRefusal(message)) {
+            this.#cacheControl = false
+            cache = false
+            corrections += 1
+            continue
+          }
         }
-        this.#thinkingForms.set(options.model, corrected)
-        form = corrected
+        // Give the failure back in the harness vocabulary: a refusal this
+        // adapter raised is already one, a parser error is not.
+        if (error instanceof LlmError) throw error
+        if (error instanceof LlmStreamError) throw new LlmError(`llm-zed: ${error.message}`, error.code)
+        throw error
       }
     }
   }

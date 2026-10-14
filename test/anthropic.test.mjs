@@ -5,6 +5,7 @@ import { buildAnthropicRequest, buildMessages } from '../lib/anthropic.js'
 const user = (text) => ({ role: 'user', content: [{ type: 'text', text }] })
 
 test('system-role text moves into the system field, in order', () => {
+  // Cache markers off: this case is about where text lands, not about caching.
   const request = buildAnthropicRequest(
     {
       model: 'claude-sonnet-5',
@@ -12,6 +13,8 @@ test('system-role text moves into the system field, in order', () => {
       messages: [{ role: 'system', content: [{ type: 'text', text: 'session prompt' }] }, user('hi')],
     },
     undefined,
+    'budget',
+    false,
   )
   assert.equal(request.system, 'one-shot preamble\n\nsession prompt')
   assert.deepEqual(request.messages, [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }])
@@ -140,4 +143,28 @@ test('the adaptive dialect carries effort in output_config, never a budget', () 
   assert.equal(none.thinking, undefined)
   assert.equal(none.output_config, undefined)
   assert.equal(none.temperature, 0.5)
+})
+
+test('marks the end of the conversation as a cache breakpoint', () => {
+  const request = buildAnthropicRequest(
+    {
+      model: 'claude-sonnet-5-5',
+      system: 'preamble',
+      messages: [user('first'), { role: 'user', content: [{ type: 'text', text: 'second' }] }],
+      tools: [{ name: 'echo', description: 'Echo.', parameters: { type: 'object', properties: {} } }],
+    },
+    undefined,
+  )
+
+  // One marker, on the last block: it caches tools, system and every message
+  // before it, and moves forward as the history grows.
+  const blocks = request.messages.at(-1).content
+  assert.deepEqual(blocks.at(-1).cache_control, { type: 'ephemeral' })
+  assert.equal(request.messages[0].content[0].cache_control, undefined)
+  // `system` and `tools` keep the shapes the gateway has already accepted.
+  assert.equal(typeof request.system, 'string')
+  assert.equal(JSON.stringify(request.tools).includes('cache_control'), false)
+
+  const uncached = buildAnthropicRequest({ model: 'claude-sonnet-5-5', messages: [user('hi')] }, undefined, 'budget', false)
+  assert.equal(JSON.stringify(uncached).includes('cache_control'), false)
 })
