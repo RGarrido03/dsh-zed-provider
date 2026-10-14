@@ -155,7 +155,9 @@ export function buildMessages(
         type: 'tool_result',
         tool_use_id: String(message.toolCallId ?? message.source?.callId ?? ''),
         content: toolResultContent(message),
-        ...(message.isError === true ? { is_error: true } : {}),
+        // Always present: Anthropic treats `is_error` as optional, but Zed's
+        // request parser requires the field on every tool result.
+        is_error: message.isError === true,
       })
       continue
     }

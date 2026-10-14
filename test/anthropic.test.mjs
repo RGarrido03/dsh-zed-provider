@@ -37,10 +37,12 @@ test('consecutive tool results merge into one user turn', () => {
 
   assert.equal(messages.length, 3)
   assert.deepEqual(messages[0].content[0], { type: 'tool_use', id: 'toolu_a', name: 'read', input: { path: 'a' } })
+  // `is_error` is always present, including on successful results: Anthropic
+  // treats it as optional, Zed's request parser requires it.
   assert.deepEqual(messages[1], {
     role: 'user',
     content: [
-      { type: 'tool_result', tool_use_id: 'toolu_a', content: 'A' },
+      { type: 'tool_result', tool_use_id: 'toolu_a', content: 'A', is_error: false },
       { type: 'tool_result', tool_use_id: 'toolu_b', content: 'boom', is_error: true },
     ],
   })
