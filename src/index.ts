@@ -50,6 +50,7 @@ import { buildAnthropicRequest } from './anthropic.js'
 import { LlmStreamError, parseZedAnthropicStream } from './parse.js'
 import { buildResponsesRequest, parseZedResponsesStream } from './responses.js'
 import { decryptAccessToken, generateSignInKeypair, signInUrl } from './signin.js'
+import { thinkingFormFor, thinkingFormFromRejection, type ThinkingForm } from './thinking.js'
 
 /** One entry of Zed's `GET /models` catalog, as far as this plugin reads it. */
 export interface ZedCatalogEntry {
@@ -359,6 +360,8 @@ class ZedAdapter extends LlmAdapter {
   #deps: ZedAdapterDeps
   #catalog: ZedCatalogEntry[] | undefined
   #catalogAt = 0
+  /** Thinking dialect each model accepted, learned from one rejected turn. */
+  #thinkingForms = new Map<string, ThinkingForm>()
 
   constructor(deps: ZedAdapterDeps) {
     super()
@@ -497,16 +500,21 @@ class ZedAdapter extends LlmAdapter {
     // Both builders take the history already projected onto this route's
     // modalities; the transcript is otherwise read-only.
     const projected = { ...options, messages: projectImagesForTextModel(options.messages ?? []) }
-    const body = JSON.stringify({
-      thread_id: randomUUID(),
-      prompt_id: randomUUID(),
-      provider: backend,
-      model: options.model,
-      provider_request:
-        backend === 'open_ai' ? buildResponsesRequest(projected, entry) : buildAnthropicRequest(projected, entry),
-    })
-
-    const send = (token: string): Promise<Response> =>
+    const learned = this.#thinkingForms.get(options.model)
+    const initialForm =
+      entry?.supports_thinking === true ? (learned ?? thinkingFormFor(options.model)) : 'budget'
+    const buildBody = (form: ThinkingForm): string =>
+      JSON.stringify({
+        thread_id: randomUUID(),
+        prompt_id: randomUUID(),
+        provider: backend,
+        model: options.model,
+        provider_request:
+          backend === 'open_ai'
+            ? buildResponsesRequest(projected, entry)
+            : buildAnthropicRequest(projected, entry, form),
+      })
+    const send = (token: string, payload: string): Promise<Response> =>
       fetch(`${baseUrl}/completions`, {
         method: 'POST',
         headers: {
@@ -517,51 +525,77 @@ class ZedAdapter extends LlmAdapter {
           [HEADER.STATUS]: 'true',
           [HEADER.STREAM_ENDED]: 'true',
         },
-        body,
+        body: payload,
         signal: options.signal ?? null,
       })
 
-    let response
-    try {
-      response = await send(await llmToken(credentials, baseUrl, options.signal))
-      if (
-        response.status === 401 ||
-        response.headers.has(HEADER.EXPIRED) ||
-        response.headers.has(HEADER.OUTDATED)
-      ) {
-        // The gateway rotates tokens faster than the TTL: mint once more and retry.
-        invalidateLlmToken(credentials)
-        response = await send(await llmToken(credentials, baseUrl, options.signal))
+    /** Send one attempt and turn provider refusals into failures; the body it
+     * returns is the stream every parser below expects. */
+    const open = async (payload: string): Promise<Response & { body: ReadableStream<Uint8Array> }> => {
+      let response: Response
+      try {
+        response = await send(await llmToken(credentials, baseUrl, options.signal), payload)
+        if (
+          response.status === 401 ||
+          response.headers.has(HEADER.EXPIRED) ||
+          response.headers.has(HEADER.OUTDATED)
+        ) {
+          // The gateway rotates tokens faster than the TTL: mint once more and retry.
+          invalidateLlmToken(credentials)
+          response = await send(await llmToken(credentials, baseUrl, options.signal), payload)
+        }
+      } catch (error) {
+        throw transportFailure('could not reach Zed Cloud', error, options.signal)
       }
-    } catch (error) {
-      throw transportFailure('could not reach Zed Cloud', error, options.signal)
+
+      if (response.status === 402) {
+        throw new LlmError(
+          "llm-zed: this Zed account has no active AI plan, or this month's prompt credits are spent. See https://zed.dev/account.",
+          'QUOTA',
+          { status: 402 },
+        )
+      }
+      if (!response.ok || response.body === null) {
+        const detail = await response.text().catch(() => '')
+        throw new LlmError(
+          `llm-zed: Zed Cloud rejected the request (HTTP ${response.status})${detail ? `: ${trim(detail, 300)}` : ''}`,
+          httpCode(response.status),
+          { status: response.status },
+        )
+      }
+      return response as Response & { body: ReadableStream<Uint8Array> }
     }
 
-    if (response.status === 402) {
-      throw new LlmError(
-        "llm-zed: this Zed account has no active AI plan, or this month's prompt credits are spent. See https://zed.dev/account.",
-        'QUOTA',
-        { status: 402 },
-      )
-    }
-    if (!response.ok || response.body === null) {
-      const detail = await response.text().catch(() => '')
-      throw new LlmError(
-        `llm-zed: Zed Cloud rejected the request (HTTP ${response.status})${detail ? `: ${trim(detail, 300)}` : ''}`,
-        httpCode(response.status),
-        { status: response.status },
-      )
-    }
-
-    try {
-      const chunks =
-        backend === 'open_ai'
-          ? parseZedResponsesStream(response.body, { signal: options.signal })
-          : parseZedAnthropicStream(response.body, { signal: options.signal })
-      yield* chunks
-    } catch (error) {
-      if (error instanceof LlmStreamError) throw new LlmError(`llm-zed: ${error.message}`, error.code)
-      throw error
+    // One correction attempt: a model refuses the thinking dialect it does not
+    // speak before producing anything, so the answer can be sent once more with
+    // the other one. Nothing has been yielded at that point, the user sees only
+    // the successful turn, and the model's dialect is remembered from then on.
+    let form = initialForm
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await open(buildBody(form))
+      let emitted = 0
+      try {
+        const chunks =
+          backend === 'open_ai'
+            ? parseZedResponsesStream(response.body, { signal: options.signal })
+            : parseZedAnthropicStream(response.body, { signal: options.signal })
+        for await (const chunk of chunks) {
+          emitted += 1
+          yield chunk
+        }
+        return
+      } catch (error) {
+        const corrected =
+          attempt === 0 && emitted === 0 && error instanceof LlmStreamError
+            ? thinkingFormFromRejection(error.message)
+            : undefined
+        if (corrected === undefined || corrected === form) {
+          if (error instanceof LlmStreamError) throw new LlmError(`llm-zed: ${error.message}`, error.code)
+          throw error
+        }
+        this.#thinkingForms.set(options.model, corrected)
+        form = corrected
+      }
     }
   }
 }

@@ -111,3 +111,31 @@ test('falls back to the advertised output cap when the caller sets none', () => 
   })
   assert.equal(request.max_tokens, 64_000)
 })
+
+test('the adaptive dialect carries effort in output_config, never a budget', () => {
+  const options = {
+    model: 'claude-sonnet-5-5',
+    messages: [user('hi')],
+    maxTokens: 4096,
+    temperature: 0.5,
+  }
+  const entry = { supports_thinking: true }
+
+  const on = buildAnthropicRequest({ ...options, reasoningEffort: 'high' }, entry, 'adaptive')
+  assert.deepEqual(on.thinking, { type: 'adaptive', display: 'summarized' })
+  assert.deepEqual(on.output_config, { effort: 'high' })
+  assert.equal(on.temperature, undefined, 'effort lives in output_config, so sampling still has to stay out')
+
+  // The adaptive generation cannot stop thinking, so `off` pins the lowest
+  // effort instead of sending a directive it would refuse.
+  const off = buildAnthropicRequest({ ...options, reasoningEffort: 'off' }, entry, 'adaptive')
+  assert.equal(off.thinking, undefined)
+  assert.deepEqual(off.output_config, { effort: 'low' })
+  assert.equal(off.temperature, undefined)
+
+  // No thinking capability at all: no directive, and sampling is welcome.
+  const none = buildAnthropicRequest({ ...options, reasoningEffort: 'high' }, {}, 'adaptive')
+  assert.equal(none.thinking, undefined)
+  assert.equal(none.output_config, undefined)
+  assert.equal(none.temperature, 0.5)
+})

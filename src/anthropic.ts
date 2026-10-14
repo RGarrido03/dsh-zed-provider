@@ -12,6 +12,7 @@
  */
 
 import type { ContentBlock, RequestMessage, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ThinkingForm } from './thinking.js'
 
 /** The one provider route this bundle owns. */
 const PROVIDER = 'zed-agent'
@@ -173,7 +174,11 @@ export function buildMessages(
   return messages
 }
 
-export function buildAnthropicRequest(options: AnthropicRequestInput, entry: RequestBudget | undefined): Record<string, unknown> {
+export function buildAnthropicRequest(
+  options: AnthropicRequestInput,
+  entry: RequestBudget | undefined,
+  form: ThinkingForm = 'budget',
+): Record<string, unknown> {
   const requested = typeof options.maxTokens === 'number' && Number.isFinite(options.maxTokens) ? options.maxTokens : 0
   const advertised = typeof entry?.max_output_tokens === 'number' ? entry.max_output_tokens : 0
   const maxTokens =
@@ -196,14 +201,27 @@ export function buildAnthropicRequest(options: AnthropicRequestInput, entry: Req
     }))
   }
 
-  const effort = options.reasoningEffort
-  const budget = typeof effort === 'string' ? THINKING_BUDGETS[effort as keyof typeof THINKING_BUDGETS] : undefined
-  if (entry?.supports_thinking === true && budget !== undefined) {
-    const clamped = Math.min(budget, maxTokens - 1)
-    if (clamped >= MIN_THINKING_BUDGET) request.thinking = { type: 'enabled', budget_tokens: clamped }
+  const effort = typeof options.reasoningEffort === 'string' ? options.reasoningEffort : undefined
+  const thinking = entry?.supports_thinking === true && effort !== undefined && effort !== 'off'
+  if (thinking && form === 'adaptive') {
+    // The adaptive generation picks its own budget; effort is the only knob, and
+    // thinking cannot be switched off, so `off` pins the lowest level instead.
+    request.thinking = { type: 'adaptive', display: 'summarized' }
+    request.output_config = { effort }
+  } else if (thinking) {
+    const budget = THINKING_BUDGETS[effort as keyof typeof THINKING_BUDGETS]
+    if (budget !== undefined) {
+      const clamped = Math.min(budget, maxTokens - 1)
+      if (clamped >= MIN_THINKING_BUDGET) request.thinking = { type: 'enabled', budget_tokens: clamped }
+    }
+  } else if (entry?.supports_thinking === true && effort === 'off' && form === 'adaptive') {
+    request.output_config = { effort: 'low' }
   }
-  // Extended thinking rejects sampling parameters, so they only travel without it.
-  if (request.thinking === undefined && typeof options.temperature === 'number') {
+  // Extended thinking rejects sampling parameters, so they travel only when the
+  // request carries no thinking directive at all — including the adaptive form,
+  // whose effort lives in `output_config` rather than in `thinking`.
+  const thinkingActive = request.thinking !== undefined || request.output_config !== undefined
+  if (!thinkingActive && typeof options.temperature === 'number') {
     request.temperature = options.temperature
   }
   if (Array.isArray(options.stop) && options.stop.length > 0) {
